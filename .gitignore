@@ -1,3 +1,13 @@
 /target
+*.o
+*.obj
+*.exe
+*.tmp
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
 /dist
 /installer

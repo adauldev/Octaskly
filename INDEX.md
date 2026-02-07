@@ -9,7 +9,6 @@ Start here if you're new to OCTASKLY:
 1. **[README.md](README.md)** - Overview, features, quick start
 2. **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Commands, examples, troubleshooting
 3. **[DISTRIBUTION.md](DISTRIBUTION.md)** - Building, installing, and distributing
-4. **[demo.sh](demo.sh)** - Automated showcase
 
 ### For Developers
 If you're building with OCTASKLY:
@@ -224,7 +223,7 @@ To extend OCTASKLY:
 ## Frequently Asked Questions
 
 **Q: How do I submit tasks?**
-A: Use the scheduler API directly (library mode) or submit via TCP messages. REST API coming soon.
+A: Use the REST API (`curl http://localhost:3000/api/v1/tasks`) or scheduler API directly (library mode). See API_REFERENCE.md for details.
 
 **Q: Can I use it with Docker?**
 A: Yes, the binary works in containers. Docker image coming soon.
@@ -243,8 +242,7 @@ See QUICK_REFERENCE.md for more Q&A.
 ## Next Steps
 
 1. **Read** - Check README.md and DISTRIBUTION.md
-2. **Try** - Run `./demo.sh`
-3. **Build** - Run `./scripts/build-release.sh all`
+2. **Build** - Run `./scripts/build-release.sh all`
 4. **Install** - Run `./scripts/install.sh` or appropriate installer
 5. **Deploy** - Use installer scripts across machines
 6. **Extend** - Add your own features
