@@ -1,178 +1,250 @@
-# Octaskly Installer for Windows (PowerShell)
-# Run with: powershell -ExecutionPolicy Bypass -Command "& {$(Invoke-WebRequest https://github.com/adauldev/octaskly/releases/latest/download/install.ps1 -UseBasicParsing).Content | powershell}"
-
-# Or locally:
-# powershell -ExecutionPolicy Bypass -File install.ps1
+# Octaskly Installer for Windows PowerShell
+# Requirements: PowerShell 5.1+ running as Administrator
+# Usage: powershell -ExecutionPolicy Bypass -File install.ps1
 
 param(
-    [string]$Version = "v1.0.0",
-    [string]$InstallDir = "C:\Program Files\Octaskly"
+    [string]$Command = "install",
+    [switch]$Force = $false
 )
 
-# Configuration
-$ProjectRepo = "adauldev/octaskly"
-$BinaryName = "octaskly"
-$GitHubAPI = "https://api.github.com/repos/$ProjectRepo/releases/latest"
+$ErrorActionPreference = "Stop"
 
-# Colors
-function Write-Info {
-    Write-Host "[INFO] $args" -ForegroundColor Cyan
+# Color definitions
+class Colors {
+    static [string] $Reset = "`e[0m"
+    static [string] $Red = "`e[31m"
+    static [string] $Green = "`e[32m"
+    static [string] $Yellow = "`e[33m"
+    static [string] $Blue = "`e[34m"
+    static [string] $Bold = "`e[1m"
 }
 
-function Write-Success {
-    Write-Host "[OK] $args" -ForegroundColor Green
+# Helper functions
+function Write-Error-Msg {
+    param([string]$Message)
+    Write-Host "$([Colors]::Red)✗ $Message$([Colors]::Reset)"
 }
 
-function Write-Error {
-    Write-Host "[ERROR] $args" -ForegroundColor Red
-    exit 1
+function Write-Success-Msg {
+    param([string]$Message)
+    Write-Host "$([Colors]::Green)✓ $Message$([Colors]::Reset)"
 }
 
-function Write-Warning {
-    Write-Host "[WARN] $args" -ForegroundColor Yellow
+function Write-Info-Msg {
+    param([string]$Message)
+    Write-Host "$([Colors]::Blue)$Message$([Colors]::Reset)"
 }
 
-# Main function
-function Install-Octaskly {
-    Clear-Host
-    Write-Host ""
-    Write-Host "==========================================" -ForegroundColor Cyan
-    Write-Host "  Octaskly v1.0.0 Installer for Windows" -ForegroundColor Cyan
-    Write-Host "==========================================" -ForegroundColor Cyan
-    Write-Host ""
+function Write-Warning-Msg {
+    param([string]$Message)
+    Write-Host "$([Colors]::Yellow)⚠ $Message$([Colors]::Reset)"
+}
 
-    # Check for administrator privileges; if not, relaunch elevated
-    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-    if (-not $isAdmin) {
-        Write-Info "Not running as Administrator. Relaunching with elevated privileges..."
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = 'powershell'
-        $args = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-        if ($Version) { $args += " -Version $Version" }
-        if ($InstallDir) { $args += " -InstallDir `"$InstallDir`"" }
-        $psi.Arguments = $args
-        $psi.Verb = 'runas'
-        try {
-            [System.Diagnostics.Process]::Start($psi) | Out-Null
-            exit 0
-        }
-        catch {
-            Write-Error "Failed to elevate privileges: $_"
-        }
+function Check-Administrator {
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+    
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Error-Msg "This script must be run as Administrator"
+        Write-Host ""
+        Write-Info-Msg "Right-click PowerShell and select 'Run as administrator', then run:"
+        Write-Host ""
+        Write-Host "  powershell -ExecutionPolicy Bypass -File install.ps1"
+        Write-Host ""
+        exit 1
     }
+}
 
-    Write-Success "Running as Administrator"
+function Check-Rust {
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Write-Error-Msg "Cargo not found. Install Rust first:"
+        Write-Host ""
+        Write-Info-Msg "Download from: https://rustup.rs"
+        Write-Host ""
+        Write-Info-Msg "Or: winget install Rustlang.Rust.MSVC"
+        exit 1
+    }
+    Write-Success-Msg "Cargo found at: $(rustc --version)"
+}
 
-    # Detect system info
-    Write-Info "Detecting system..."
+function Build-Release {
+    Write-Info-Msg "Building Octaskly release binary..."
+    Write-Host ""
     
-    $osInfo = Get-CimInstance Win32_OperatingSystem
-    $processorInfo = Get-CimInstance Win32_Processor
+    if (-not (Test-Path "Cargo.toml")) {
+        Write-Error-Msg "Cargo.toml not found. Are you in the project root?"
+        exit 1
+    }
     
-    Write-Success "Detected: Windows $($osInfo.Caption) x86_64"
-    Write-Info "Installation path: $InstallDir"
-
-    # Ensure TLS 1.2 for downloads
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-    # Get latest version if not specified
-    Write-Info "Fetching latest version from GitHub..."
-    
+    Write-Host "Running: cargo build --release"
     try {
-        $releaseInfo = Invoke-RestMethod -Uri $GitHubAPI -UseBasicParsing -ErrorAction Stop
-        $Version = $releaseInfo.tag_name
-        Write-Success "Latest version: $Version"
+        & cargo build --release 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error-Msg "Build failed with exit code $LASTEXITCODE"
+            exit 1
+        }
+    } catch {
+        Write-Error-Msg "Build error: $_"
+        exit 1
     }
-    catch {
-        Write-Warning "Could not fetch version from GitHub API, using default: $Version"
+    
+    $binary = ".\target\release\octaskly.exe"
+    
+    if (-not (Test-Path $binary)) {
+        Write-Error-Msg "Binary not found after build: $binary"
+        exit 1
     }
+    
+    Write-Success-Msg "Build successful: $binary"
+    return $binary
+}
 
+function Install-Windows {
+    param([string]$Binary)
+    
+    $installPath = "C:\Program Files\octaskly"
+    
+    Write-Host ""
+    Write-Info-Msg "┌─ Installing for Windows"
+    Write-Host ""
+    
     # Create installation directory
-    if (-not (Test-Path $InstallDir)) {
-        Write-Info "Creating installation directory..."
-        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-        Write-Success "Directory created"
-    }
-    else {
-        Write-Success "Directory exists"
-    }
-
-    # Download binary
-    $downloadUrl = "https://github.com/$ProjectRepo/releases/download/$Version/$BinaryName-windows-x64-$Version.exe"
-    $tempFile = Join-Path $env:TEMP "$BinaryName.exe"
-
-    Write-Info "Downloading binary..."
-    Write-Info "URL: $downloadUrl"
-
-    try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $tempFile -UseBasicParsing -ErrorAction Stop
-        Write-Success "Binary downloaded"
-    }
-    catch {
-        Write-Error "Failed to download binary: $_"
-    }
-
-    # Install binary
-    Write-Info "Installing binary..."
-    
-    $installPath = Join-Path $InstallDir "$BinaryName.exe"
-    
-    try {
-        Copy-Item -Path $tempFile -Destination $installPath -Force -ErrorAction Stop
-        Write-Success "Binary installed to $InstallDir"
-    }
-    catch {
-        Write-Error "Failed to install binary: $_"
-    }
-
-    # Add to PATH (user scope)
-    Write-Info "Adding to PATH..."
-    
-    $userPath = [Environment]::GetEnvironmentVariable("PATH", [EnvironmentVariableTarget]::User)
-    
-    if ($userPath -like "*$InstallDir*") {
-        Write-Success "Already in PATH"
-    }
-    else {
-        $newPath = "$userPath;$InstallDir"
-        [Environment]::SetEnvironmentVariable("PATH", $newPath, [EnvironmentVariableTarget]::User)
-        Write-Success "Added to PATH"
-        Write-Warning "Please close and reopen PowerShell/Command Prompt for PATH changes to take effect"
-    }
-
-    # Verify installation
-    Write-Info "Verifying installation..."
-    
     if (-not (Test-Path $installPath)) {
-        Write-Error "Binary file not found after installation"
+        Write-Host "Creating directory: $installPath"
+        New-Item -ItemType Directory -Path $installPath -Force | Out-Null
+        Write-Success-Msg "Directory created"
     }
-
-    # Try to run help
-    try {
-        & $installPath --help | Out-Null
-        Write-Success "Installation verified"
+    
+    # Copy binary
+    $targetBinary = Join-Path $installPath "octaskly.exe"
+    Write-Host "Copying binary to: $targetBinary"
+    Copy-Item -Path $Binary -Destination $targetBinary -Force
+    Write-Success-Msg "Binary installed"
+    
+    # Add to PATH
+    Write-Host "Updating PATH environment variable..."
+    
+    $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    
+    if ($currentPath -notlike "*$installPath*") {
+        $newPath = "$installPath;$currentPath"
+        [Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
+        Write-Success-Msg "Added $installPath to system PATH"
+        Write-Warning-Msg "Restart PowerShell or CMD to apply changes"
+    } else {
+        Write-Success-Msg "Already in PATH: $installPath"
     }
-    catch {
-        Write-Error "Binary verification failed: $_"
-    }
+    
+    Write-Host ""
+    Write-Info-Msg "└─"
+}
 
-    # Cleanup
-    Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
-
-    # Show success message
+function Show-Usage {
     Write-Host ""
-    Write-Host "==========================================" -ForegroundColor Cyan
-    Write-Success "Installation successful!"
+    Write-Info-Msg "Octaskly Installer for Windows PowerShell"
     Write-Host ""
-    Write-Host "Quick start:" -ForegroundColor Green
-    Write-Host "  octaskly dispatcher --port 7878"
-    Write-Host "  octaskly worker --name myworker"
+    Write-Host "Usage: powershell -ExecutionPolicy Bypass -File install.ps1 [command]"
     Write-Host ""
-    Write-Host "For help: octaskly --help"
-    Write-Host "==========================================" -ForegroundColor Cyan
+    Write-Host "Commands:"
+    Write-Host "  install  Install binary to C:\Program Files\octaskly (default)"
+    Write-Host "  build    Build release binary only"
+    Write-Host "  help     Show this message"
+    Write-Host ""
+    Write-Host "Flags:"
+    Write-Host "  -Force   Force overwrite if already installed"
+    Write-Host ""
+    Write-Host "Examples:"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File install.ps1 build"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File install.ps1 install"
+    Write-Host ""
+    Write-Host "Requirements:"
+    Write-Host "  • Windows 10/11"
+    Write-Host "  • PowerShell 5.1 or later"
+    Write-Host "  • Administrator privileges"
+    Write-Host "  • Rust/Cargo installed (for building)"
     Write-Host ""
 }
 
-# Run installation
-Install-Octaskly
+function Main {
+    Write-Host ""
+    Write-Info-Msg "╔════════════════════════════════════════╗"
+    Write-Info-Msg "║    OCTASKLY - Windows Installer        ║"
+    Write-Info-Msg "║         Distributed Task System        ║"
+    Write-Info-Msg "╚════════════════════════════════════════╝"
+    Write-Host ""
+    
+    try {
+        switch ($Command.ToLower()) {
+            "build" {
+                Write-Info-Msg "Build mode selected"
+                Write-Host ""
+                Check-Rust
+                Build-Release
+                Write-Host ""
+            }
+            
+            "install" {
+                Write-Info-Msg "Install mode selected"
+                Write-Host ""
+                
+                Check-Administrator
+                Check-Rust
+                
+                $binary = $null
+                
+                if (Test-Path ".\target\release\octaskly.exe") {
+                    $binary = ".\target\release\octaskly.exe"
+                    Write-Success-Msg "Found pre-built binary"
+                } else {
+                    Write-Warning-Msg "Binary not found, building..."
+                    Write-Host ""
+                    $binary = Build-Release
+                }
+                
+                Write-Host ""
+                Install-Windows -Binary $binary
+                Write-Host ""
+                
+                Write-Host ""
+                Write-Info-Msg "╔════════════════════════════════════════╗"
+                Write-Success-Msg "║    Installation Complete! ✓            ║"
+                Write-Success-Msg "║    Run: octaskly --help                ║"
+                Write-Info-Msg "╚════════════════════════════════════════╝"
+                Write-Host ""
+                
+                Write-Host "Testing installation..."
+                Start-Sleep -Milliseconds 500
+                
+                if (Get-Command octaskly -ErrorAction SilentlyContinue) {
+                    Write-Success-Msg "octaskly is globally accessible!"
+                    Write-Host ""
+                    & octaskly --version
+                } else {
+                    Write-Warning-Msg "Please restart PowerShell for changes to take effect"
+                    Write-Host ""
+                    Write-Host "Then run: octaskly --version"
+                }
+                
+                Write-Host ""
+            }
+            
+            "help" {
+                Show-Usage
+            }
+            
+            default {
+                Write-Error-Msg "Unknown command: $Command"
+                Write-Host ""
+                Show-Usage
+                exit 1
+            }
+        }
+    } catch {
+        Write-Error-Msg "Error: $_"
+        Write-Host ""
+        exit 1
+    }
+}
+
+# Run main
+Main

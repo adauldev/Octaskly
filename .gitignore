@@ -1,1 +1,17 @@
 /target
+
+# Inno Setup
+*.o
+*.obj
+*.exe
+*.tmp
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

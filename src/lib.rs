@@ -16,6 +16,7 @@ pub mod util;
 // P2P WiFi Direct networking module
 // Modul jaringan WiFi Direct P2P
 pub mod p2p;
+pub mod p2p_distribution;
 
 // Enhanced features for version 2.0
 // Fitur yang ditingkatkan untuk versi 2.0
@@ -35,6 +36,7 @@ pub use scheduler::Scheduler;
 pub use state::{DispatcherState, WorkerState};
 pub use transport::Transport;
 pub use p2p::{P2PNetwork, P2PPeer};
+pub use p2p_distribution::P2PDistributor;
 
 // New exports
 pub use security_enhanced::SecurityManager;

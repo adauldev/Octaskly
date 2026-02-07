@@ -12,12 +12,13 @@ For First-Time Users
   1. Start here: README.md
      - Feature overview
      - Basic architecture
-     - Build instructions
+     - Quick start commands
      
-  2. Then read: DISTRIBUTION.md (Building and Installing)
-     - Cross-platform build process
-     - Platform-specific installers
-     - Installation verification
+  2. Installation: INSTALLATION.md
+     - One-command global installation
+     - Windows, macOS, Linux installers
+     - Automatic PATH setup
+     - Uninstall instructions
   
   3. Review: PROJECT_STRUCTURE.md (Module Overview section)
      - Understand code organization
@@ -26,6 +27,21 @@ For First-Time Users
   4. Try: Getting started section in README.md
      - Run dispatcher and workers
      - Submit first task
+
+For Developers
+
+  1. Build from source: README.md (Build from Source)
+     - Compile debug/release binaries
+     - Manual installation
+  
+  2. Learn structure: PROJECT_STRUCTURE.md
+     - Module architecture
+     - Code organization
+  
+  3. Understand P2P: IMPLEMENTATION.md
+     - Peer discovery
+     - Task distribution
+     - Resource sharing
 
 For Security-Conscious Users
 
@@ -52,32 +68,36 @@ For API Integration
 
 DOCUMENTATION BY PURPOSE
 
+Installation and Setup
+
+  Document: INSTALLATION.md (PRIMARY)
+  This is the main installation guide with:
+    - Platform-specific installers (Windows, macOS, Linux)
+    - One-command installation scripts
+    - Automatic PATH configuration
+    - Uninstall instructions
+    - Troubleshooting guide
+    - Advanced options
+  
+  Document: README.md (Quick Start)
+  Sections:
+    - Installation (Recommended)
+    - Build from Source
+    - Run Dispatcher/Worker
+
 Building and Compiling
 
-  Document: DISTRIBUTION.md
-  Sections:
-    - BUILDING FOR ALL PLATFORMS
-    - Platform-specific instructions
-    - Cross-compilation setup
-    - Binary optimization
-
-  Document: README.md
-  Sections:
-    - BUILDING
-    - Build flags and optimizations
+  Document: README.md (Build from Source)
+  Build instructions:
+    - Debug build: cargo build
+    - Release build: cargo build --release
+    - Output locations
   
   Document: PROJECT_STRUCTURE.md
   Sections:
     - DEPENDENCIES
     - COMPILATION FLAGS
 
-Running Octaskly
-
-  Document: DISTRIBUTION.md
-  Sections:
-    - INSTALLATION
-    - Platform-specific setup
-    - PATH configuration
     - Verification
 
   Document: README.md

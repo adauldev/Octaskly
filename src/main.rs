@@ -5,6 +5,7 @@
 // Mendukung: mode dispatcher (penjadwalan tugas) dan mode worker (eksekusi tugas)
 
 use anyhow::Result;
+use clap::Parser;
 use octaskly::cmd::Cli;
 use octaskly::scheduler::Scheduler;
 use octaskly::state::{DispatcherState, WorkerState};
@@ -21,25 +22,88 @@ use tracing::{error, info, warn, debug};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Self-installation logic
+    // Logika instalasi otomatis
+    let install_dir = dirs::home_dir().unwrap().join("bin");
+    let install_path = install_dir.join("octaskly.exe");
+    let current_exe = std::env::current_exe().unwrap();
+
+    if current_exe != install_path {
+        // Install the binary globally
+        // Instal binary secara global
+        std::fs::create_dir_all(&install_dir).unwrap();
+
+        // Read current binary content into memory
+        // Baca konten binary saat ini ke memori
+        let binary_content = std::fs::read(&current_exe).unwrap();
+
+        // Write to install location
+        // Tulis ke lokasi instalasi
+        std::fs::write(&install_path, &binary_content).unwrap();
+
+        // Add to user PATH
+        // Tambahkan ke PATH pengguna
+        let ps_command = format!(
+            r#"[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";{}", "User")"#,
+            install_dir.display()
+        );
+        let _ = std::process::Command::new("powershell")
+            .arg("-Command")
+            .arg(&ps_command)
+            .output();
+
+        // Execute the installed binary with the same arguments
+        // Jalankan binary yang diinstal dengan argumen yang sama
+        let args: Vec<String> = std::env::args().collect();
+        let mut cmd = std::process::Command::new(&install_path);
+        cmd.args(&args[1..]);
+        let _ = cmd.spawn().unwrap();
+
+        std::process::exit(0);
+    }
+
     util::setup_logging();
 
-    let cmd = Cli::parse_and_run()?;
+    let cli = Cli::parse();
+    let _monitor = cli.monitor;
+    let _verbose = cli.verbose;
+    
+    let cmd = match cli.command {
+        Some(c) => c,
+        None => {
+            Cli::parse_and_run()?
+        }
+    };
 
     match cmd {
         octaskly::cmd::Command::Dispatcher {
             bind,
             port,
             workdir,
+            max_workers: _,
+            task_timeout: _,
+            p2p_enabled: _,
+            discovery_port: _,
             ui: _ui,
         } => {
+            if _monitor {
+                info!("[DISPATCHER] Monitor mode enabled");
+            }
             run_dispatcher(&bind, port, workdir).await?;
         }
         octaskly::cmd::Command::Worker {
             name,
-            allow_shell,
+            dispatcher: _,
+            dispatcher_port: _,
             max_jobs,
-            ..
+            cpu_cores: _,
+            memory_mb: _,
+            gpu: _,
+            allow_shell,
         } => {
+            if _monitor {
+                info!("[WORKER] Monitor mode enabled");
+            }
             run_worker(&name, allow_shell, max_jobs).await?;
         }
         _ => {
@@ -61,6 +125,35 @@ async fn run_dispatcher(bind: &str, port: u16, workdir: PathBuf) -> Result<()> {
     let scheduler = Arc::new(Scheduler::new());
     let active_tasks: Arc<RwLock<std::collections::HashMap<String, String>>> = 
         Arc::new(RwLock::new(std::collections::HashMap::new()));
+
+    // Initialize P2P peer discovery and task distribution
+    // Inisialisasi penemuan peer P2P dan distribusi task
+    let p2p_network = match start_p2p_discovery(
+        format!("dispatcher-{}", port),
+        "Octaskly-Dispatcher".to_string(),
+        5555,
+    ).await {
+        Ok(network) => {
+            info!("[P2P] P2P network initialized successfully");
+            Some(network)
+        }
+        Err(e) => {
+            warn!("[P2P] P2P initialization warning: {}", e);
+            None
+        }
+    };
+
+    // Initialize P2P task distributor for resource sharing
+    // Inisialisasi distributor task P2P untuk berbagi resource
+    // Default: 4 CPU cores, 8GB RAM, no GPU, 4 task slots
+    // Default: 4 core CPU, 8GB RAM, tidak ada GPU, 4 slot task
+    let p2p_distributor = Arc::new(octaskly::P2PDistributor::new(
+        format!("dispatcher-{}", port),
+        4,           // CPU cores (default estimate)
+        8192,        // RAM in MB (8GB default)
+        false,       // GPU available
+        4,           // Task slots
+    ));
 
     // Create work directory if not exists
     // Buat direktori kerja jika belum ada
@@ -173,6 +266,38 @@ async fn run_dispatcher(bind: &str, port: u16, workdir: PathBuf) -> Result<()> {
         }
     });
 
+    // P2P task distribution management loop
+    // Loop manajemen distribusi task P2P
+    if let Some(_p2p_net) = p2p_network.clone() {
+        let p2p_distributor_clone = p2p_distributor.clone();
+        let p2p_network_clone = p2p_network.clone();
+        
+        tokio::spawn(async move {
+            if let Some(p2p_net) = p2p_network_clone {
+                if let Err(e) = manage_p2p_distribution(
+                    p2p_distributor_clone,
+                    p2p_net,
+                    1,
+                ).await {
+                    error!("[P2P] Task distribution error: {}", e);
+                }
+            }
+        });
+    }
+
+    // P2P peer discovery and resource updates
+    // Penemuan peer P2P dan pembaruan resource
+    let p2p_distributor_clone = p2p_distributor.clone();
+    
+    tokio::spawn(async move {
+        if let Err(e) = handle_p2p_peer_updates(
+            p2p_distributor_clone,
+            5,
+        ).await {
+            warn!("[P2P] Peer update error: {}", e);
+        }
+    });
+
     // Handle graceful shutdown
     // Tangani penutupan yang elegan
     tokio::signal::ctrl_c().await?;
@@ -207,6 +332,33 @@ async fn handle_dispatcher_message(
         
         Message::TaskProgress { task_id, progress } => {
             debug!("[DISPATCHER] Task {} progress: {:.1}%", task_id, progress * 100.0);
+        }
+        
+        // P2P: Resource availability announcement
+        // P2P: Pengumuman ketersediaan resource
+        Message::ResourceAnnounce(resources) => {
+            info!(
+                "[P2P] Resource announced from {}: CPU={}, RAM={}MB, GPU={}, Slots={}",
+                resources.peer_id, resources.cpu_cores, resources.ram_mb, resources.gpu_available, resources.available_slots
+            );
+        }
+        
+        // P2P: Peer discovery request
+        // P2P: Permintaan penemuan peer
+        Message::PeerDiscoveryRequest { requester_id, timestamp } => {
+            info!(
+                "[P2P] Peer discovery request from {} at {}",
+                requester_id, timestamp
+            );
+        }
+        
+        // P2P: Peer discovery response
+        // P2P: Respons penemuan peer
+        Message::PeerDiscoveryResponse { responder_id, resources } => {
+            info!(
+                "[P2P] Peer discovery response from {}: {}",
+                responder_id, resources.peer_id
+            );
         }
         
         // Worker heartbeat for health monitoring
@@ -396,6 +548,50 @@ async fn handle_worker_message(
             worker_state.set_current_task(None).await;
         }
         
+        // P2P: Shared task from peer
+        // P2P: Task bersama dari peer
+        Message::P2PShareTask { task, requester_id } => {
+            info!("[P2P] Shared task received from {}: {}", requester_id, task.id);
+            
+            // For now, execute like normal task
+            let task_id = task.id.clone();
+            worker_state.set_current_task(Some(task.clone())).await;
+            
+            match executor.execute_with_timeout(&task).await {
+                Ok(result) => {
+                    info!("[P2P] Shared task {} completed", task_id);
+                    let task_result = octaskly::protocol::TaskResult {
+                        task_id: task_id.clone(),
+                        worker_id: "unknown".to_string(),
+                        status: result.status,
+                        stdout: result.stdout,
+                        stderr: result.stderr,
+                        exit_code: result.exit_code,
+                        duration_ms: result.duration_ms,
+                        completed_at: chrono::Local::now().timestamp(),
+                    };
+                    
+                    // Send result back to requester
+                    let result_msg = Message::TaskCompleted(task_result);
+                    let _ = octaskly::transport::Transport::new().send_message(dispatcher_addr, &result_msg).await;
+                }
+                Err(e) => {
+                    error!("[P2P] Shared task execution failed: {}", e);
+                }
+            }
+            
+            worker_state.set_current_task(None).await;
+        }
+        
+        // P2P: Peer discovery request
+        // P2P: Permintaan penemuan peer
+        Message::PeerDiscoveryRequest { requester_id, timestamp } => {
+            info!(
+                "[P2P] Discovery request from {} at {}",
+                requester_id, timestamp
+            );
+        }
+        
         _ => {
             warn!("Unexpected message type for worker: {:?}", msg);
         }
@@ -417,3 +613,112 @@ async fn find_available_port(start_port: u16) -> Result<u16> {
     Err(anyhow::anyhow!("No available port found"))
 }
 
+/// Start P2P peer discovery and management
+/// Mulai penemuan peer P2P dan manajemen
+async fn start_p2p_discovery(
+    peer_id: String,
+    peer_name: String,
+    broadcast_port: u16,
+) -> Result<Arc<octaskly::P2PNetwork>> {
+    let p2p_network = Arc::new(octaskly::P2PNetwork::new(
+        peer_id.clone(),
+        peer_name.clone(),
+        broadcast_port,
+    )?);
+
+    // Start mDNS service discovery
+    p2p_network.start_mdns_discovery().await?;
+
+    // Start discovery listener on broadcast port
+    p2p_network.start_discovery_listener(5555).await?;
+
+    // Start periodic peer discovery announcements
+    p2p_network.start_periodic_discovery(10).await?;
+
+    // Announce this peer to the network
+    p2p_network.announce_peer().await?;
+
+    info!(
+        "[P2P] Peer discovery started for: {} ({})",
+        peer_name, peer_id
+    );
+
+    Ok(p2p_network)
+}
+
+/// Manage P2P task distribution
+/// Kelola distribusi task P2P
+async fn manage_p2p_distribution(
+    distributor: Arc<octaskly::P2PDistributor>,
+    _p2p_network: Arc<octaskly::P2PNetwork>,
+    dispatcher_interval: u64,
+) -> Result<()> {
+    // Periodic task distribution loop
+    let mut ticker = interval(Duration::from_secs(dispatcher_interval));
+
+    loop {
+        ticker.tick().await;
+
+        // Cleanup stale peer information
+        if let Err(e) = distributor.cleanup_stale_peers(30).await {
+            warn!("[P2P] Peer cleanup error: {}", e);
+        }
+
+        // Process pending tasks and distribute to available peers
+        while let Some(task) = distributor.get_next_task().await {
+            // Find best peer for this task
+            let best_peer = distributor.find_best_peer(&task, 1, 256, false).await;
+
+            match best_peer {
+                Some(peer_id) => {
+                    if let Err(e) = distributor.assign_to_peer(task.id.clone(), peer_id.clone()).await {
+                        error!("[P2P] Failed to assign task {} to peer {}: {}", task.id, peer_id, e);
+                        distributor.enqueue_p2p_task(task).await?;
+                    } else {
+                        info!("[P2P] Task {} assigned to peer {}", task.id, peer_id);
+                    }
+                }
+                None => {
+                    warn!("[P2P] No suitable peer found for task {}, re-queueing", task.id);
+                    distributor.enqueue_p2p_task(task).await?;
+                }
+            }
+        }
+
+        // Log distribution stats periodically
+        let pending = distributor.pending_count().await;
+        let active = distributor.assignment_count().await;
+        let peers = distributor.get_all_peers().await;
+
+        debug!(
+            "[P2P] Distribution stats - Pending: {}, Active: {}, Peers: {}",
+            pending, active, peers.len()
+        );
+    }
+}
+
+/// Handle P2P peer discovery and resource updates
+/// Tangani penemuan peer P2P dan pembaruan resource
+async fn handle_p2p_peer_updates(
+    distributor: Arc<octaskly::P2PDistributor>,
+    discovery_interval: u64,
+) -> Result<()> {
+    let mut ticker = interval(Duration::from_secs(discovery_interval));
+
+    loop {
+        ticker.tick().await;
+
+        // Log current peer status
+        let peers = distributor.get_all_peers().await;
+        for peer in peers {
+            debug!(
+                "[P2P] Peer: {} - CPU: {}, RAM: {}MB, GPU: {}, Slots: {}",
+                peer.peer_id,
+                peer.cpu_cores,
+                peer.ram_mb,
+                peer.gpu_available,
+                peer.available_slots
+            );
+        }
+    }
+}

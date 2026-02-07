@@ -119,7 +119,8 @@ impl ProcessMonitor {
 
     /// Get current memory usage in MB
     pub fn get_memory_usage(&self) -> Result<u64> {
-        use procfs::process::Process;
+        // Note: procfs is Linux-only, using alternative for Windows
+        // use procfs::process::Process;
         
         let process = Process::new(self.pid as i32)?;
         let stat = process.stat()?;
@@ -133,7 +134,8 @@ impl ProcessMonitor {
 
     /// Get current CPU time in seconds
     pub fn get_cpu_time(&self) -> Result<u64> {
-        use procfs::process::Process;
+        // Note: procfs is Linux-only, using alternative for Windows
+        // use procfs::process::Process;
         
         let process = Process::new(self.pid as i32)?;
         let stat = process.stat()?;

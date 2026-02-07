@@ -10,12 +10,18 @@ pub fn get_local_ip() -> Option<String> {
     Some(local_addr.ip().to_string())
 }
 
-/// Setup tracing/logging
+/// Setup tracing/logging with suppression for --help display
 pub fn setup_logging() {
     use tracing_subscriber::EnvFilter;
 
+    // If --help or -h is present, don't log to avoid timestamp noise
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h" || arg == "-V" || arg == "--version") {
+        return;
+    }
+
     let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
 
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)

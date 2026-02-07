@@ -13,6 +13,7 @@ use tracing::{debug, info, warn};
 
 // Service discovery configuration
 // Konfigurasi penemuan layanan
+#[allow(dead_code)]
 const SERVICE_TYPE: &str = "_octaskly._udp";
 const DISCOVERY_PORT: u16 = 5555;
 
@@ -188,6 +189,7 @@ impl Default for Discovery {
 
 /// Get local IP address from UDP socket connection
 /// Dapatkan alamat IP lokal dari koneksi soket UDP
+#[allow(dead_code)]
 fn get_local_ip() -> Option<String> {
     use std::net::UdpSocket;
 

@@ -272,6 +272,36 @@ impl P2PNetwork {
         Ok(())
     }
 
+    /// Periodic peer discovery via broadcast
+    /// Penemuan peer berkala melalui siaran
+    pub async fn start_periodic_discovery(&self, interval_secs: u64) -> Result<()> {
+        let local_id = self.local_id.clone();
+        let local_name = self.local_name.clone();
+        let local_port = self.local_port;
+
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(
+                std::time::Duration::from_secs(interval_secs)
+            );
+
+            loop {
+                ticker.tick().await;
+
+                let message = format!("{}|{}|{}", local_id, local_name, local_port);
+                if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+                    let _ = socket.set_broadcast(true);
+                    let _ = socket.send_to(
+                        message.as_bytes(),
+                        "255.255.255.255:5555".parse::<SocketAddr>().unwrap(),
+                    );
+                }
+            }
+        });
+
+        info!("[P2P] Periodic discovery started (interval: {}s)", interval_secs);
+        Ok(())
+    }
+
     /// Listen for peer announcements via UDP broadcast
     /// Dengarkan pengumuman peer melalui siaran UDP
     ///

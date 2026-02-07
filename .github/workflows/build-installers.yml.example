@@ -1,0 +1,362 @@
+# GitHub Actions CI/CD Workflow for Octaskly Installers
+
+This example shows how to automate building all installers on every tag push.
+
+## How This Works
+
+1. Tag a release: `git tag v1.0.0 && git push --tags`
+2. GitHub Actions automatically:
+   - Builds on Windows, macOS, and Linux
+   - Creates native installer for each OS
+   - Uploads installers to GitHub Releases
+   - Users can download directly
+
+## Setup Instructions
+
+### 1. Create workflow directory
+
+```bash
+mkdir -p .github/workflows
+```
+
+### 2. Copy this file
+
+Save the content below as `.github/workflows/build-installers.yml`:
+
+```yaml
+name: Build and Release Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+          - os: macos-latest
+            name: macOS
+          - os: windows-latest
+            name: Windows
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      # Check out code
+      - uses: actions/checkout@v3
+      
+      # Install Rust
+      - uses: dtolnay/rust-toolchain@stable
+      
+      # Install Inno Setup (Windows only)
+      - name: Install Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup -y
+          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      
+      # Install build tools (Linux only)
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev rpm build-essential
+      
+      # Build release binary
+      - name: Build release binary
+        run: cargo build --release
+      
+      # Build Windows installer
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          iscc installer/octaskly-installer.iss
+      
+      # Build macOS installer
+      - name: Build macOS installer
+        if: runner.os == 'macOS'
+        run: bash scripts/build-macos-pkg.sh
+      
+      # Build Linux installers
+      - name: Build Linux installers
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/build-linux-deb.sh amd64
+          bash scripts/build-linux-rpm.sh x86_64
+          bash scripts/build-linux-run.sh
+      
+      # Upload artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: installers-${{ matrix.name }}
+          path: dist/
+      
+      # Create SHA256 checksums
+      - name: Create checksums
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            dir /s /b > files.txt
+          else
+            find . -type f -exec sha256sum {} \; > SHA256SUMS.txt
+          fi
+      
+      # Upload to Release
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Create release notes
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Create Release Notes
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Octaskly ${{ github.ref }}
+          body: |
+            # Octaskly Release
+            
+            ## Download
+            
+            ### Windows
+            - **octaskly-setup-1.0.0.exe** - Double-click to install
+            
+            ### macOS
+            - **octaskly-1.0.0.pkg** - Double-click to install
+            
+            ### Linux
+            - **octaskly_1.0.0_amd64.deb** - For Debian/Ubuntu
+              ```bash
+              sudo dpkg -i octaskly_1.0.0_amd64.deb
+              ```
+            
+            - **octaskly-1.0.0-1.x86_64.rpm** - For RedHat/Fedora
+              ```bash
+              sudo rpm -i octaskly-1.0.0-1.x86_64.rpm
+              ```
+            
+            - **octaskly-installer-1.0.0.run** - Universal Linux
+              ```bash
+              sudo ./octaskly-installer-1.0.0.run
+              ```
+            
+            ## Checksums
+            
+            Verify integrity with:
+            ```bash
+            sha256sum -c SHA256SUMS.txt
+            ```
+            
+            ## Installation
+            
+            See [docs/INSTALLATION.md](docs/INSTALLATION.md) for detailed instructions.
+            
+            ## What's New
+            
+            See full changelog in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+          draft: false
+          prerelease: false
+```
+
+## 3. How to trigger the workflow
+
+```bash
+# Tag a release
+git tag v1.0.0
+git push origin v1.0.0
+
+# Or create a release on GitHub
+# GitHub will automatically detect the tag and run the workflow
+```
+
+## 4. What happens next
+
+The workflow will:
+
+1. ✅ Start building on 3 platforms simultaneously
+2. ✅ Install required tools for each platform
+3. ✅ Build Rust release binary
+4. ✅ Create native installer for each OS
+5. ✅ Generate SHA256 checksums
+6. ✅ Upload all installers to GitHub Releases
+7. ✅ Create release notes with download links
+
+## 5. View results
+
+1. Go to your GitHub repository
+2. Click "Releases" tab
+3. See the new release with all installers attached
+4. Users can download directly from there
+
+## Environment Variables (if needed)
+
+If you need to pass version info:
+
+```yaml
+env:
+  VERSION: ${{ github.ref_name }}  # Gets the tag name (e.g., v1.0.0)
+```
+
+Use in scripts:
+
+```bash
+echo "Building version: $VERSION"
+```
+
+## Optional: Code Signing
+
+### Windows Code Signing (Authenticode)
+
+```yaml
+      # Add after "Build Windows installer" step
+      - name: Sign Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          # Requires certificate in secrets
+          # signtool sign /f certificate.pfx /p ${{ secrets.CERT_PASSWORD }} dist/windows/*.exe
+          # Note: Set up certificate in GitHub Secrets first
+```
+
+### macOS Code Signing
+
+```yaml
+      # Add after "Build macOS installer" step
+      - name: Sign macOS installer
+        if: runner.os == 'macOS'
+        run: |
+          # Requires Developer ID certificate
+          # productsign --sign "Developer ID" dist/macos/*.pkg dist/macos/*-signed.pkg
+          # Note: Set up certificate in GitHub Secrets first
+```
+
+## Troubleshooting
+
+### Windows build fails
+- Make sure Inno Setup 6 version is available on `choco`
+- Or download manually: https://jrsoftware.com/isdl.php
+
+### macOS build fails
+- Xcode tools should be available by default on GitHub Actions
+- Or explicitly install: `xcode-select --install`
+
+### Linux build fails
+- Make sure all build tools are installed
+- Check APT sources are updated: `sudo apt-get update`
+
+### Upload to Release fails
+- Make sure `GITHUB_TOKEN` has write permissions
+- Check repository Secrets are configured
+
+## Alternative: Custom Release Step
+
+If `softprops/action-gh-release` doesn't work, use:
+
+```yaml
+      - name: Upload to Release (Alternative)
+        run: |
+          # Install GitHub CLI
+          sudo apt-get install gh -y
+          
+          # Upload files
+          gh release create ${{ github.ref }} dist/* \
+            --title "Octaskly ${{ github.ref_name }}" \
+            --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+## Matrix Strategy Details
+
+The workflow uses a matrix to run on multiple OS:
+
+```yaml
+matrix:
+  include:
+    - os: ubuntu-latest
+      name: Linux
+    - os: macos-latest
+      name: macOS
+    - os: windows-latest
+      name: Windows
+```
+
+Each combination runs in parallel, saving time.
+
+## Status Badges (Optional)
+
+Add to your README:
+
+```markdown
+[![Build and Release Installers](https://github.com/YOUR_USERNAME/octaskly/workflows/Build%20and%20Release%20Installers/badge.svg)](https://github.com/YOUR_USERNAME/octaskly/actions)
+```
+
+## Complete Workflow File
+
+Save this as `.github/workflows/build-installers.yml`:
+
+See the YAML content above.
+
+---
+
+## Manual Testing Before CI/CD
+
+Before setting up CI/CD, test building locally:
+
+### Windows
+```powershell
+# Install Inno Setup first
+iscc installer/octaskly-installer.iss
+# Check dist/windows/octaskly-setup-1.0.0.exe
+```
+
+### macOS
+```bash
+bash scripts/build-macos-pkg.sh
+# Check dist/macos/octaskly-1.0.0.pkg
+```
+
+### Linux
+```bash
+bash scripts/build-linux-deb.sh amd64
+bash scripts/build-linux-rpm.sh x86_64
+bash scripts/build-linux-run.sh
+# Check dist/linux/ for all files
+```
+
+---
+
+## Next Steps
+
+1. Create `.github/workflows/build-installers.yml`
+2. Commit and push to your repository
+3. Create a tag: `git tag v1.0.0 && git push --tags`
+4. Watch GitHub Actions build all installers
+5. Check Releases page for download links
+
+**That's it!** Now every tag automatically builds and publishes installers.
+
+---
+
+## See Also
+
+- [BUILD_AND_DISTRIBUTE.md](../../BUILD_AND_DISTRIBUTE.md) - Manual build guide
+- [INSTALLATION_REFERENCE.md](../../INSTALLATION_REFERENCE.md) - Installation details
+- GitHub Actions docs: https://docs.github.com/en/actions
